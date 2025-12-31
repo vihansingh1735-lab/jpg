@@ -1,5 +1,6 @@
 require("dotenv").config();
 const fs = require("fs");
+const http = require("http");
 const {
   Client,
   GatewayIntentBits,
@@ -15,16 +16,15 @@ const {
   PermissionFlagsBits,
   ChannelType
 } = require("discord.js");
-const http = require("http");
 
+/* ================= WEB SERVICE ================= */
 const PORT = process.env.PORT || 3000;
-
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("🟢 Discord bot is running.");
-}).listen(PORT, () => {
-  console.log(`🌐 Web service running on port ${PORT}`);
-});
+  res.end("🟢 Discord bot running");
+}).listen(PORT);
+
+/* ================= CHECK TOKEN ================= */
 if (!process.env.DISCORD_TOKEN) throw new Error("DISCORD_TOKEN missing");
 
 /* ================= CLIENT ================= */
@@ -137,50 +137,90 @@ client.on("interactionCreate", async interaction => {
     return interaction.reply({ embeds: [embed], components: [row1, row2], ephemeral: true });
   }
 
-  /* ---------- BUTTONS ---------- */
+  /* ---------- BUTTONS (MOD + CRIMEPASS) ---------- */
   if (interaction.isButton()) {
+
+    /* ===== MOD PANEL ===== */
     const [action, id] = interaction.customId.split("_");
-    const member = await interaction.guild.members.fetch(id);
+    if (id) {
+      const member = await interaction.guild.members.fetch(id).catch(() => null);
+      if (!member) return;
 
-    if (action === "warn") {
-      const modal = new ModalBuilder()
-        .setCustomId(`warnmodal_${id}`)
-        .setTitle("Warn User")
-        .addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("reason")
-              .setLabel("Reason")
-              .setStyle(TextInputStyle.Paragraph)
-          )
-        );
-      return interaction.showModal(modal);
+      if (action === "warn") {
+        const modal = new ModalBuilder()
+          .setCustomId(`warnmodal_${id}`)
+          .setTitle("Warn User")
+          .addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId("reason")
+                .setLabel("Reason")
+                .setStyle(TextInputStyle.Paragraph)
+            )
+          );
+        return interaction.showModal(modal);
+      }
+
+      if (action === "kick") {
+        await member.kick();
+        return interaction.reply({ content: "✅ Kicked", ephemeral: true });
+      }
+
+      if (action === "ban") {
+        await member.ban();
+        return interaction.reply({ content: "✅ Banned", ephemeral: true });
+      }
+
+      if (action === "timeout") {
+        await member.timeout(10 * 60 * 1000);
+        return interaction.reply({ content: "⏳ Timed out (10 minutes)", ephemeral: true });
+      }
+
+      if (action === "untimeout") {
+        await member.timeout(null);
+        return interaction.reply({ content: "✅ Timeout removed", ephemeral: true });
+      }
+
+      if (action === "removewarn") {
+        if (warnings[id]?.length) warnings[id].pop();
+        saveWarns();
+        return interaction.reply({ content: "➖ Removed 1 warning", ephemeral: true });
+      }
     }
 
-    if (action === "kick") {
-      await member.kick();
-      return interaction.reply({ content: "✅ Kicked", ephemeral: true });
+    /* ===== CRIMEPASS ===== */
+    if (interaction.customId === "crime_accept") {
+      if (!interaction.member.roles.cache.some(r => CRIME_ADMIN_ROLES.includes(r.id)))
+        return interaction.reply({ content: "❌ Not allowed", ephemeral: true });
+
+      await interaction.reply("✅ Crime pass **ACCEPTED** (1 hour started)");
+
+      const userId = interaction.channel.permissionOverwrites.cache
+        .find(p => p.type === 1 && p.id !== interaction.guild.id)?.id;
+
+      setTimeout(async () => {
+        try {
+          await interaction.channel.send(`<@${userId}> ⏳ **Crimepass has ended.**`);
+        } catch {}
+      }, 60 * 60 * 1000);
+
+      return;
     }
 
-    if (action === "ban") {
-      await member.ban();
-      return interaction.reply({ content: "✅ Banned", ephemeral: true });
+    if (interaction.customId === "crime_deny") {
+      if (!interaction.member.roles.cache.some(r => CRIME_ADMIN_ROLES.includes(r.id)))
+        return interaction.reply({ content: "❌ Not allowed", ephemeral: true });
+
+      return interaction.reply("❌ Crime pass **DENIED**");
     }
 
-    if (action === "timeout") {
-      await member.timeout(10 * 60 * 1000);
-      return interaction.reply({ content: "⏳ Timed out (10 minutes)", ephemeral: true });
-    }
+    if (interaction.customId === "crime_close") {
+      if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels))
+        return interaction.reply({ content: "❌ Cannot close", ephemeral: true });
 
-    if (action === "untimeout") {
-      await member.timeout(null);
-      return interaction.reply({ content: "✅ Timeout removed", ephemeral: true });
-    }
-
-    if (action === "removewarn") {
-      if (warnings[id]?.length) warnings[id].pop();
-      saveWarns();
-      return interaction.reply({ content: "➖ Removed 1 warning", ephemeral: true });
+      await interaction.reply("🔒 Closing ticket...");
+      setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
+      return;
     }
   }
 
@@ -204,7 +244,7 @@ client.on("interactionCreate", async interaction => {
     return interaction.reply({ content: "✅ Backup request sent", ephemeral: true });
   }
 
-  /* ---------- CRIMEPASS ---------- */
+  /* ---------- CRIMEPASS SLASH ---------- */
   if (interaction.isChatInputCommand() && interaction.commandName === "crimepass") {
     if (!interaction.member.roles.cache.has(CRIMEPASS_ROLE))
       return interaction.reply({ content: "❌ No permission", ephemeral: true });
@@ -222,7 +262,7 @@ client.on("interactionCreate", async interaction => {
     const embed = new EmbedBuilder()
       .setTitle("🟥 CRIME PASS REQUEST")
       .setDescription(
-        `User: ${interaction.user}\n\nWants to become a Criminal for 1 hour.\n⏳ Admin Action Required`
+        `User: ${interaction.user}\n\nWants to become a Criminal for 1 hour.\n\n🔘 Admin Action Required`
       )
       .setColor(0xff0000);
 
@@ -241,55 +281,6 @@ client.on("interactionCreate", async interaction => {
     return interaction.reply({ content: "✅ Crimepass ticket created", ephemeral: true });
   }
 });
-/* ---------- CRIMEPASS BUTTONS ---------- */
-if (interaction.isButton()) {
 
-  /* === ACCEPT === */
-  if (interaction.customId === "crime_accept") {
-    // permission check
-    if (!interaction.member.roles.cache.some(r => CRIME_ADMIN_ROLES.includes(r.id))) {
-      return interaction.reply({ content: "❌ You are not allowed to do this.", ephemeral: true });
-    }
-
-    const user = interaction.channel.permissionOverwrites.cache
-      .find(p => p.type === 1)?.id;
-
-    if (!user) {
-      return interaction.reply({ content: "❌ User not found.", ephemeral: true });
-    }
-
-    await interaction.reply({ content: "✅ Crime pass **ACCEPTED**. Timer started (1 hour)." });
-
-    // ⏳ AUTO END AFTER 1 HOUR
-    setTimeout(async () => {
-      try {
-        await interaction.channel.send(`<@${user}> ⏳ **Crimepass has ended.**`);
-      } catch {}
-    }, 60 * 60 * 1000);
-
-    return;
-  }
-
-  /* === DENY === */
-  if (interaction.customId === "crime_deny") {
-    if (!interaction.member.roles.cache.some(r => CRIME_ADMIN_ROLES.includes(r.id))) {
-      return interaction.reply({ content: "❌ You are not allowed to do this.", ephemeral: true });
-    }
-
-    await interaction.reply("❌ Crime pass request **DENIED**.");
-    return;
-  }
-
-  /* === CLOSE TICKET === */
-  if (interaction.customId === "crime_close") {
-    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-      return interaction.reply({ content: "❌ You cannot close this ticket.", ephemeral: true });
-    }
-
-    await interaction.reply("🔒 Closing ticket...");
-    setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
-    return;
-  }
-}
 /* ================= LOGIN ================= */
 client.login(process.env.DISCORD_TOKEN);
