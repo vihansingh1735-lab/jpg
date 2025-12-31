@@ -14,18 +14,15 @@ const {
   TextInputStyle,
   SlashCommandBuilder,
   PermissionFlagsBits,
-  ChannelType
+  ActivityType
 } = require("discord.js");
 
-/* ================= WEB SERVICE ================= */
+/* ================= BASIC WEB SERVER (RENDER) ================= */
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
+http.createServer((_, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("🟢 Discord bot running");
+  res.end("ACF Bot Running");
 }).listen(PORT);
-
-/* ================= CHECK TOKEN ================= */
-if (!process.env.DISCORD_TOKEN) throw new Error("DISCORD_TOKEN missing");
 
 /* ================= CLIENT ================= */
 const client = new Client({
@@ -38,247 +35,184 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-/* ================= CONSTANTS ================= */
-const PREFIX = "!";
-const BACKUP_ROLE = "1451114146988036232";
-const CRIMEPASS_ROLE = "1451114147319119950";
-const CRIME_ADMIN_ROLES = [
-  "1451114147335901331",
-  "1451114147335901332",
-  "1451114147335901334"
-];
-const CRIME_CATEGORY = "1451114152008351873";
+if (!process.env.DISCORD_TOKEN) {
+  throw new Error("DISCORD_TOKEN missing");
+}
 
-/* ================= STORAGE ================= */
+/* ================= CONSTANTS ================= */
+const BAD_WORDS = ["fuck", "shit", "bitch", "asshole"];
+const LOG_FILE = "./data/logs.json";
+const WARN_FILE = "./data/warnings.json";
+
 if (!fs.existsSync("./data")) fs.mkdirSync("./data");
 
-const WARN_FILE = "./data/warnings.json";
+/* ================= STORAGE ================= */
 const warnings = fs.existsSync(WARN_FILE)
   ? JSON.parse(fs.readFileSync(WARN_FILE))
   : {};
 
-const saveWarns = () =>
+const saveWarnings = () =>
   fs.writeFileSync(WARN_FILE, JSON.stringify(warnings, null, 2));
 
-const warnCount = id => warnings[id]?.length || 0;
+const getWarns = id => warnings[id]?.length || 0;
 
 /* ================= READY ================= */
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
+  // 🔥 FORCE PRESENCE (BLOCKS BOTGHOST STATUS)
+  client.user.setPresence({
+    activities: [
+      {
+        name: "Alpha Contingency Force",
+        type: ActivityType.Watching
+      }
+    ],
+    status: "online"
+  });
+
+  // Slash commands (GLOBAL)
   const commands = [
     new SlashCommandBuilder()
       .setName("acfmodpanel")
       .setDescription("Open ACF moderation panel")
       .addUserOption(o =>
-        o.setName("user").setDescription("Target").setRequired(true)
+        o.setName("user").setDescription("Target user").setRequired(true)
       )
-      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
-
-    new SlashCommandBuilder()
-      .setName("backup")
-      .setDescription("Request backup")
-      .addStringOption(o =>
-        o.setName("location").setDescription("Backup location").setRequired(true)
-      ),
-
-    new SlashCommandBuilder()
-      .setName("crimepass")
-      .setDescription("Request crime pass (1 hour)")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
   ].map(c => c.toJSON());
 
   await client.application.commands.set(commands);
-  console.log("🌍 Slash commands registered");
+  console.log("🌍 Slash commands synced");
 });
 
-/* ================= PREFIX BACKUP ================= */
-client.on("messageCreate", async msg => {
-  if (!msg.guild || msg.author.bot) return;
-  if (!msg.content.startsWith(`${PREFIX}backup`)) return;
+/* ================= AUTOMOD ================= */
+client.on("messageCreate", async message => {
+  if (!message.guild || message.author.bot) return;
 
-  const location = msg.content.slice(8).trim();
-  if (!location) return msg.reply("❌ Location required");
+  const content = message.content.toLowerCase();
 
-  const m = await msg.channel.send(
-    `<@&${BACKUP_ROLE}>\n📦 **BACKUP REQUEST**\n\n📍 Location: **${location}**\n👤 Requested by: ${msg.author}\n\nReact with ✅ if you can give backup`
-  );
-  await m.react("✅");
-  await m.react("❌");
+  // Bad words
+  if (BAD_WORDS.some(w => content.includes(w))) {
+    await message.delete().catch(() => {});
+    if (!warnings[message.author.id]) warnings[message.author.id] = [];
+    warnings[message.author.id].push({
+      reason: "AutoMod: bad language",
+      time: new Date().toISOString()
+    });
+    saveWarnings();
+
+    const count = getWarns(message.author.id);
+    if (count === 3) {
+      await message.member.timeout(10 * 60 * 1000, "3 AutoMod warnings");
+    }
+  }
+
+  // Discord invite
+  if (content.includes("discord.gg/")) {
+    await message.delete().catch(() => {});
+  }
 });
 
 /* ================= INTERACTIONS ================= */
 client.on("interactionCreate", async interaction => {
 
-  /* ---------- ACF MOD PANEL ---------- */
+  /* ---------- MOD PANEL ---------- */
   if (interaction.isChatInputCommand() && interaction.commandName === "acfmodpanel") {
     const target = interaction.options.getMember("user");
 
     const embed = new EmbedBuilder()
-      .setTitle(`Moderation Panel for ${target.user.username}`)
-      .addFields(
-        { name: "User ID", value: target.id },
-        { name: "Current Warnings", value: `${warnCount(target.id)}` }
-      )
+      .setTitle("ACF Moderation Panel")
       .setThumbnail(target.user.displayAvatarURL())
+      .addFields(
+        { name: "User", value: `${target}` },
+        { name: "User ID", value: target.id },
+        { name: "Warnings", value: `${getWarns(target.id)}` }
+      )
       .setColor(0xffa500);
 
-    const row1 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`warn_${target.id}`).setLabel("Warn").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`kick_${target.id}`).setLabel("Kick").setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId(`ban_${target.id}`).setLabel("Ban").setStyle(ButtonStyle.Danger)
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`warn_${target.id}`)
+        .setLabel("Warn")
+        .setStyle(ButtonStyle.Secondary),
+
+      new ButtonBuilder()
+        .setCustomId(`timeout_${target.id}`)
+        .setLabel("Timeout (10m)")
+        .setStyle(ButtonStyle.Primary),
+
+      new ButtonBuilder()
+        .setCustomId(`kick_${target.id}`)
+        .setLabel("Kick")
+        .setStyle(ButtonStyle.Danger)
     );
 
-    const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`timeout_${target.id}`).setLabel("Timeout (10m)").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`untimeout_${target.id}`).setLabel("Remove Timeout").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`removewarn_${target.id}`).setLabel("Remove 1 Warn").setStyle(ButtonStyle.Secondary)
-    );
-
-    return interaction.reply({ embeds: [embed], components: [row1, row2], ephemeral: true });
+    return interaction.reply({
+      embeds: [embed],
+      components: [row],
+      ephemeral: true
+    });
   }
 
-  /* ---------- BUTTONS (MOD + CRIMEPASS) ---------- */
+  /* ---------- MOD PANEL BUTTONS ---------- */
   if (interaction.isButton()) {
-
-    /* ===== MOD PANEL ===== */
     const [action, id] = interaction.customId.split("_");
-    if (id) {
-      const member = await interaction.guild.members.fetch(id).catch(() => null);
-      if (!member) return;
+    const member = await interaction.guild.members.fetch(id).catch(() => null);
+    if (!member) return;
 
-      if (action === "warn") {
-        const modal = new ModalBuilder()
-          .setCustomId(`warnmodal_${id}`)
-          .setTitle("Warn User")
-          .addComponents(
-            new ActionRowBuilder().addComponents(
-              new TextInputBuilder()
-                .setCustomId("reason")
-                .setLabel("Reason")
-                .setStyle(TextInputStyle.Paragraph)
-            )
-          );
-        return interaction.showModal(modal);
-      }
-
-      if (action === "kick") {
-        await member.kick();
-        return interaction.reply({ content: "✅ Kicked", ephemeral: true });
-      }
-
-      if (action === "ban") {
-        await member.ban();
-        return interaction.reply({ content: "✅ Banned", ephemeral: true });
-      }
-
-      if (action === "timeout") {
-        await member.timeout(10 * 60 * 1000);
-        return interaction.reply({ content: "⏳ Timed out (10 minutes)", ephemeral: true });
-      }
-
-      if (action === "untimeout") {
-        await member.timeout(null);
-        return interaction.reply({ content: "✅ Timeout removed", ephemeral: true });
-      }
-
-      if (action === "removewarn") {
-        if (warnings[id]?.length) warnings[id].pop();
-        saveWarns();
-        return interaction.reply({ content: "➖ Removed 1 warning", ephemeral: true });
-      }
+    // WARN
+    if (action === "warn") {
+      const modal = new ModalBuilder()
+        .setCustomId(`warnmodal_${id}`)
+        .setTitle("Warn User")
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("reason")
+              .setLabel("Reason")
+              .setStyle(TextInputStyle.Paragraph)
+          )
+        );
+      return interaction.showModal(modal);
     }
 
-    /* ===== CRIMEPASS ===== */
-    if (interaction.customId === "crime_accept") {
-      if (!interaction.member.roles.cache.some(r => CRIME_ADMIN_ROLES.includes(r.id)))
-        return interaction.reply({ content: "❌ Not allowed", ephemeral: true });
-
-      await interaction.reply("✅ Crime pass **ACCEPTED** (1 hour started)");
-
-      const userId = interaction.channel.permissionOverwrites.cache
-        .find(p => p.type === 1 && p.id !== interaction.guild.id)?.id;
-
-      setTimeout(async () => {
-        try {
-          await interaction.channel.send(`<@${userId}> ⏳ **Crimepass has ended.**`);
-        } catch {}
-      }, 60 * 60 * 1000);
-
-      return;
+    // TIMEOUT
+    if (action === "timeout") {
+      await member.timeout(10 * 60 * 1000, "Timed out via mod panel");
+      return interaction.reply({
+        content: "⏳ User timed out for 10 minutes",
+        ephemeral: true
+      });
     }
 
-    if (interaction.customId === "crime_deny") {
-      if (!interaction.member.roles.cache.some(r => CRIME_ADMIN_ROLES.includes(r.id)))
-        return interaction.reply({ content: "❌ Not allowed", ephemeral: true });
-
-      return interaction.reply("❌ Crime pass **DENIED**");
-    }
-
-    if (interaction.customId === "crime_close") {
-      if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels))
-        return interaction.reply({ content: "❌ Cannot close", ephemeral: true });
-
-      await interaction.reply("🔒 Closing ticket...");
-      setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
-      return;
+    // KICK
+    if (action === "kick") {
+      await member.kick("Kicked via mod panel");
+      return interaction.reply({
+        content: "👢 User kicked",
+        ephemeral: true
+      });
     }
   }
 
   /* ---------- WARN MODAL ---------- */
   if (interaction.isModalSubmit()) {
     const id = interaction.customId.split("_")[1];
+    const reason = interaction.fields.getTextInputValue("reason");
+
     if (!warnings[id]) warnings[id] = [];
-    warnings[id].push({ reason: interaction.fields.getTextInputValue("reason") });
-    saveWarns();
-    return interaction.reply({ content: "⚠ Warning issued", ephemeral: true });
-  }
-
-  /* ---------- BACKUP SLASH ---------- */
-  if (interaction.isChatInputCommand() && interaction.commandName === "backup") {
-    const loc = interaction.options.getString("location");
-    const m = await interaction.channel.send(
-      `<@&${BACKUP_ROLE}>\n📦 **BACKUP REQUEST**\n\n📍 Location: **${loc}**\n👤 Requested by: ${interaction.user}\n\nReact with ✅ if you can give backup`
-    );
-    await m.react("✅");
-    await m.react("❌");
-    return interaction.reply({ content: "✅ Backup request sent", ephemeral: true });
-  }
-
-  /* ---------- CRIMEPASS SLASH ---------- */
-  if (interaction.isChatInputCommand() && interaction.commandName === "crimepass") {
-    if (!interaction.member.roles.cache.has(CRIMEPASS_ROLE))
-      return interaction.reply({ content: "❌ No permission", ephemeral: true });
-
-    const channel = await interaction.guild.channels.create({
-      name: `crimepass-${interaction.user.username}`,
-      type: ChannelType.GuildText,
-      parent: CRIME_CATEGORY,
-      permissionOverwrites: [
-        { id: interaction.guild.id, deny: ["ViewChannel"] },
-        { id: interaction.user.id, allow: ["ViewChannel", "SendMessages"] }
-      ]
+    warnings[id].push({
+      reason,
+      moderator: interaction.user.id,
+      time: new Date().toISOString()
     });
+    saveWarnings();
 
-    const embed = new EmbedBuilder()
-      .setTitle("🟥 CRIME PASS REQUEST")
-      .setDescription(
-        `User: ${interaction.user}\n\nWants to become a Criminal for 1 hour.\n\n🔘 Admin Action Required`
-      )
-      .setColor(0xff0000);
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("crime_accept").setLabel("Accept").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("crime_deny").setLabel("Deny").setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId("crime_close").setLabel("Close Ticket").setStyle(ButtonStyle.Secondary)
-    );
-
-    await channel.send({
-      content: CRIME_ADMIN_ROLES.map(r => `<@&${r}>`).join(" "),
-      embeds: [embed],
-      components: [row]
+    return interaction.reply({
+      content: "⚠️ Warning issued",
+      ephemeral: true
     });
-
-    return interaction.reply({ content: "✅ Crimepass ticket created", ephemeral: true });
   }
 });
 
