@@ -117,7 +117,26 @@ client.on("messageCreate", async message => {
     addWarning(message.author.id, "Invite link", client.user.id);
     return;
   }
+async function applyTimeout(member, minutes, reason) {
+  const until = Date.now() + minutes * 60 * 1000;
 
+  await member.timeout(until, reason).catch(() => {});
+  
+  const log = getLogChannel(member.guild);
+  if (log) {
+    const embed = new EmbedBuilder()
+      .setTitle("User Timed Out")
+      .setDescription(`${member} timed out for **${minutes} minutes**`)
+      .addFields({ name: "Reason", value: reason })
+      .setColor(0xe67e22)
+      .setTimestamp();
+    log.send({ embeds: [embed] });
+  }
+}
+
+function getWarnCount(userId) {
+  return warnings[userId]?.length || 0;
+}
   // -------- PREFIX COMMANDS --------
   if (!message.content.startsWith(PREFIX)) return;
 
