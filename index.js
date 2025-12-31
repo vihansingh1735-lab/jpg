@@ -266,6 +266,6 @@ client.on("interactionCreate", async interaction => {
     return interaction.reply({ content: "⚠️ Warning issued", ephemeral: true });
   }
 });
-
+console.log("TOKEN CHECK:", process.env.DISCORD_TOKEN);
 /* ================= LOGIN ================= */
 client.login(process.env.DISCORD_TOKEN);
