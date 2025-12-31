@@ -16,9 +16,11 @@ const {
 } = require("discord.js");
 
 const fs = require("fs");
+
 if (!process.env.DISCORD_TOKEN) {
   throw new Error("DISCORD_TOKEN is missing");
 }
+
 /* ================= CLIENT ================= */
 const client = new Client({
   intents: [
@@ -34,10 +36,11 @@ const PREFIX = "!";
 const BAD_WORDS = ["fuck", "shit", "bitch", "asshole", "nigger", "faggot"];
 
 /* ================= STORAGE ================= */
+const DATA_DIR = "./data";
 const CONFIG_PATH = "./data/config.json";
 const WARN_PATH = "./data/warnings.json";
 
-if (!fs.existsSync("./data")) fs.mkdirSync("./data");
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
 const config = fs.existsSync(CONFIG_PATH)
   ? JSON.parse(fs.readFileSync(CONFIG_PATH))
@@ -55,6 +58,7 @@ const saveWarnings = () =>
 
 /* ================= HELPERS ================= */
 const getGuildConfig = g => config[g.id] || {};
+
 const isMod = m =>
   m.permissions.has(PermissionFlagsBits.ModerateMembers) ||
   m.permissions.has(PermissionFlagsBits.Administrator);
@@ -77,9 +81,9 @@ function addWarning(userId, reason, modId) {
 const getWarnCount = id => warnings[id]?.length || 0;
 
 async function applyTimeout(member, minutes, reason) {
-  await member
-    .timeout(minutes * 60 * 1000, reason)
-    .catch(() => {});
+  if (!member?.timeout) return;
+
+  await member.timeout(minutes * 60 * 1000, reason).catch(() => {});
 
   const log = getLogChannel(member.guild);
   if (log) {
@@ -109,7 +113,9 @@ client.once("ready", async () => {
       .setName("setlog")
       .setDescription("Set log channel")
       .addChannelOption(o =>
-        o.setName("channel").setDescription("Log channel").setRequired(true)
+        o.setName("channel")
+          .setDescription("Log channel")
+          .setRequired(true)
       )
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
@@ -117,19 +123,29 @@ client.once("ready", async () => {
       .setName("moderate")
       .setDescription("Open moderation panel")
       .addUserOption(o =>
-        o.setName("user").setDescription("Target").setRequired(true)
+        o.setName("user")
+          .setDescription("Target user")
+          .setRequired(true)
       ),
 
     new SlashCommandBuilder()
       .setName("timeout")
       .setDescription("Timeout a user")
-.addStringOption(o =>
-  o.setName("reason")
-   .setDescription("Reason for timeout")
-   .setRequired(false)
-) 
-      .addIntegerOption(o => o.setName("minutes").setRequired(true))
-      .addStringOption(o => o.setName("reason"))
+      .addUserOption(o =>
+        o.setName("user")
+          .setDescription("User to timeout")
+          .setRequired(true)
+      )
+      .addIntegerOption(o =>
+        o.setName("minutes")
+          .setDescription("Timeout duration in minutes")
+          .setRequired(true)
+      )
+      .addStringOption(o =>
+        o.setName("reason")
+          .setDescription("Reason for timeout")
+          .setRequired(false)
+      )
       .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
   ].map(c => c.toJSON());
 
@@ -158,8 +174,9 @@ client.on("messageCreate", async message => {
   if (warns === 5) await applyTimeout(message.member, 1440, "5 warnings");
 
   if (!message.content.startsWith(PREFIX)) return;
-  const cmd = message.content.slice(PREFIX.length).toLowerCase();
-  if (cmd === "help") message.reply("Use `/moderate` or `/help`");
+  if (message.content.slice(PREFIX.length).toLowerCase() === "help") {
+    message.reply("Use `/moderate` or `/help`");
+  }
 });
 
 /* ================= INTERACTIONS ================= */
@@ -168,11 +185,12 @@ client.on("interactionCreate", async interaction => {
   /* ---------- SLASH ---------- */
   if (interaction.isChatInputCommand()) {
 
-    if (interaction.commandName === "help")
+    if (interaction.commandName === "help") {
       return interaction.reply({
         content: "Prefix: `!help`\nSlash: `/moderate`",
         ephemeral: true
       });
+    }
 
     if (interaction.commandName === "setlog") {
       config[interaction.guild.id] = {
@@ -272,6 +290,10 @@ client.on("interactionCreate", async interaction => {
     return interaction.reply({ content: "⚠️ Warning issued", ephemeral: true });
   }
 });
-console.log("TOKEN CHECK:", process.env.DISCORD_TOKEN);
+
+/* ================= SAFETY ================= */
+process.on("unhandledRejection", console.error);
+process.on("uncaughtException", console.error);
+
 /* ================= LOGIN ================= */
 client.login(process.env.DISCORD_TOKEN);
