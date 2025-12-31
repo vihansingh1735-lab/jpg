@@ -16,7 +16,9 @@ const {
 } = require("discord.js");
 
 const fs = require("fs");
-
+if (!process.env.DISCORD_TOKEN) {
+  throw new Error("DISCORD_TOKEN is missing");
+}
 /* ================= CLIENT ================= */
 const client = new Client({
   intents: [
