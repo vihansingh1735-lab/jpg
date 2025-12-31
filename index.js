@@ -1,5 +1,5 @@
 require("dotenv").config();
-
+const fs = require("fs");
 const {
   Client,
   GatewayIntentBits,
@@ -12,93 +12,46 @@ const {
   TextInputBuilder,
   TextInputStyle,
   SlashCommandBuilder,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  ChannelType
 } = require("discord.js");
 
-const fs = require("fs");
-
-if (!process.env.DISCORD_TOKEN) {
-  throw new Error("DISCORD_TOKEN is missing");
-}
+if (!process.env.DISCORD_TOKEN) throw new Error("DISCORD_TOKEN missing");
 
 /* ================= CLIENT ================= */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.MessageContent
   ],
   partials: [Partials.Channel]
 });
 
+/* ================= CONSTANTS ================= */
 const PREFIX = "!";
-const BAD_WORDS = ["fuck", "shit", "bitch", "asshole", "nigger", "faggot"];
+const BACKUP_ROLE = "1451114146988036232";
+const CRIMEPASS_ROLE = "1451114147319119950";
+const CRIME_ADMIN_ROLES = [
+  "1451114147335901331",
+  "1451114147335901332",
+  "1451114147335901334"
+];
+const CRIME_CATEGORY = "1451114152008351873";
 
 /* ================= STORAGE ================= */
-const DATA_DIR = "./data";
-const CONFIG_PATH = "./data/config.json";
-const WARN_PATH = "./data/warnings.json";
+if (!fs.existsSync("./data")) fs.mkdirSync("./data");
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-
-const config = fs.existsSync(CONFIG_PATH)
-  ? JSON.parse(fs.readFileSync(CONFIG_PATH))
+const WARN_FILE = "./data/warnings.json";
+const warnings = fs.existsSync(WARN_FILE)
+  ? JSON.parse(fs.readFileSync(WARN_FILE))
   : {};
 
-const warnings = fs.existsSync(WARN_PATH)
-  ? JSON.parse(fs.readFileSync(WARN_PATH))
-  : {};
+const saveWarns = () =>
+  fs.writeFileSync(WARN_FILE, JSON.stringify(warnings, null, 2));
 
-const saveConfig = () =>
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-
-const saveWarnings = () =>
-  fs.writeFileSync(WARN_PATH, JSON.stringify(warnings, null, 2));
-
-/* ================= HELPERS ================= */
-const getGuildConfig = g => config[g.id] || {};
-
-const isMod = m =>
-  m.permissions.has(PermissionFlagsBits.ModerateMembers) ||
-  m.permissions.has(PermissionFlagsBits.Administrator);
-
-const getLogChannel = g => {
-  const id = getGuildConfig(g).logChannelId;
-  return id ? g.channels.cache.get(id) : null;
-};
-
-function addWarning(userId, reason, modId) {
-  if (!warnings[userId]) warnings[userId] = [];
-  warnings[userId].push({
-    reason,
-    moderator: modId,
-    time: new Date().toISOString()
-  });
-  saveWarnings();
-}
-
-const getWarnCount = id => warnings[id]?.length || 0;
-
-async function applyTimeout(member, minutes, reason) {
-  if (!member?.timeout) return;
-
-  await member.timeout(minutes * 60 * 1000, reason).catch(() => {});
-
-  const log = getLogChannel(member.guild);
-  if (log) {
-    log.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("User Timed Out")
-          .setDescription(`${member} for **${minutes} minutes**`)
-          .addFields({ name: "Reason", value: reason })
-          .setColor(0xe67e22)
-          .setTimestamp()
-      ]
-    });
-  }
-}
+const warnCount = id => warnings[id]?.length || 0;
 
 /* ================= READY ================= */
 client.once("ready", async () => {
@@ -106,146 +59,73 @@ client.once("ready", async () => {
 
   const commands = [
     new SlashCommandBuilder()
-      .setName("help")
-      .setDescription("Show help"),
-
-    new SlashCommandBuilder()
-      .setName("setlog")
-      .setDescription("Set log channel")
-      .addChannelOption(o =>
-        o.setName("channel")
-          .setDescription("Log channel")
-          .setRequired(true)
-      )
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-    new SlashCommandBuilder()
-      .setName("moderate")
-      .setDescription("Open moderation panel")
+      .setName("acfmodpanel")
+      .setDescription("Open ACF moderation panel")
       .addUserOption(o =>
-        o.setName("user")
-          .setDescription("Target user")
-          .setRequired(true)
+        o.setName("user").setDescription("Target").setRequired(true)
+      )
+      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+
+    new SlashCommandBuilder()
+      .setName("backup")
+      .setDescription("Request backup")
+      .addStringOption(o =>
+        o.setName("location").setDescription("Backup location").setRequired(true)
       ),
 
     new SlashCommandBuilder()
-      .setName("timeout")
-      .setDescription("Timeout a user")
-      .addUserOption(o =>
-        o.setName("user")
-          .setDescription("User to timeout")
-          .setRequired(true)
-      )
-      .addIntegerOption(o =>
-        o.setName("minutes")
-          .setDescription("Timeout duration in minutes")
-          .setRequired(true)
-      )
-      .addStringOption(o =>
-        o.setName("reason")
-          .setDescription("Reason for timeout")
-          .setRequired(false)
-      )
-      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
+      .setName("crimepass")
+      .setDescription("Request crime pass (1 hour)")
   ].map(c => c.toJSON());
 
   await client.application.commands.set(commands);
-  console.log("🌍 Slash commands synced");
+  console.log("🌍 Slash commands registered");
 });
 
-/* ================= MESSAGE (PREFIX + AUTOMOD) ================= */
-client.on("messageCreate", async message => {
-  if (!message.guild || message.author.bot) return;
+/* ================= PREFIX BACKUP ================= */
+client.on("messageCreate", async msg => {
+  if (!msg.guild || msg.author.bot) return;
+  if (!msg.content.startsWith(`${PREFIX}backup`)) return;
 
-  const content = message.content.toLowerCase();
+  const location = msg.content.slice(8).trim();
+  if (!location) return msg.reply("❌ Location required");
 
-  if (BAD_WORDS.some(w => content.includes(w))) {
-    await message.delete().catch(() => {});
-    addWarning(message.author.id, "Bad language", client.user.id);
-  }
-
-  if (content.includes("discord.gg/")) {
-    await message.delete().catch(() => {});
-    addWarning(message.author.id, "Invite link", client.user.id);
-  }
-
-  const warns = getWarnCount(message.author.id);
-  if (warns === 3) await applyTimeout(message.member, 15, "3 warnings");
-  if (warns === 5) await applyTimeout(message.member, 1440, "5 warnings");
-
-  if (!message.content.startsWith(PREFIX)) return;
-  if (message.content.slice(PREFIX.length).toLowerCase() === "help") {
-    message.reply("Use `/moderate` or `/help`");
-  }
+  const m = await msg.channel.send(
+    `<@&${BACKUP_ROLE}>\n📦 **BACKUP REQUEST**\n\n📍 Location: **${location}**\n👤 Requested by: ${msg.author}\n\nReact with ✅ if you can give backup`
+  );
+  await m.react("✅");
+  await m.react("❌");
 });
 
 /* ================= INTERACTIONS ================= */
 client.on("interactionCreate", async interaction => {
 
-  /* ---------- SLASH ---------- */
-  if (interaction.isChatInputCommand()) {
+  /* ---------- ACF MOD PANEL ---------- */
+  if (interaction.isChatInputCommand() && interaction.commandName === "acfmodpanel") {
+    const target = interaction.options.getMember("user");
 
-    if (interaction.commandName === "help") {
-      return interaction.reply({
-        content: "Prefix: `!help`\nSlash: `/moderate`",
-        ephemeral: true
-      });
-    }
+    const embed = new EmbedBuilder()
+      .setTitle(`Moderation Panel for ${target.user.username}`)
+      .addFields(
+        { name: "User ID", value: target.id },
+        { name: "Current Warnings", value: `${warnCount(target.id)}` }
+      )
+      .setThumbnail(target.user.displayAvatarURL())
+      .setColor(0xffa500);
 
-    if (interaction.commandName === "setlog") {
-      config[interaction.guild.id] = {
-        logChannelId: interaction.options.getChannel("channel").id
-      };
-      saveConfig();
-      return interaction.reply({ content: "✅ Log channel set", ephemeral: true });
-    }
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`warn_${target.id}`).setLabel("Warn").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`kick_${target.id}`).setLabel("Kick").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`ban_${target.id}`).setLabel("Ban").setStyle(ButtonStyle.Danger)
+    );
 
-    if (interaction.commandName === "timeout") {
-      if (!isMod(interaction.member))
-        return interaction.reply({ content: "❌ No permission", ephemeral: true });
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`timeout_${target.id}`).setLabel("Timeout (10m)").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`untimeout_${target.id}`).setLabel("Remove Timeout").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`removewarn_${target.id}`).setLabel("Remove 1 Warn").setStyle(ButtonStyle.Secondary)
+    );
 
-      await applyTimeout(
-        interaction.options.getMember("user"),
-        interaction.options.getInteger("minutes"),
-        interaction.options.getString("reason") || "No reason"
-      );
-
-      return interaction.reply({ content: "✅ User timed out", ephemeral: true });
-    }
-
-    if (interaction.commandName === "moderate") {
-      if (!isMod(interaction.member))
-        return interaction.reply({ content: "❌ No permission", ephemeral: true });
-
-      const target = interaction.options.getMember("user");
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`warn_${target.id}`)
-          .setLabel("Warn")
-          .setStyle(ButtonStyle.Secondary),
-
-        new ButtonBuilder()
-          .setCustomId(`kick_${target.id}`)
-          .setLabel("Kick")
-          .setStyle(ButtonStyle.Danger),
-
-        new ButtonBuilder()
-          .setCustomId(`ban_${target.id}`)
-          .setLabel("Ban")
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("Moderation Panel")
-            .setDescription(`${target}`)
-        ],
-        components: [row],
-        ephemeral: true
-      });
-    }
+    return interaction.reply({ embeds: [embed], components: [row1, row2], ephemeral: true });
   }
 
   /* ---------- BUTTONS ---------- */
@@ -269,31 +149,89 @@ client.on("interactionCreate", async interaction => {
     }
 
     if (action === "kick") {
-      await member.kick("Kicked via panel");
+      await member.kick();
       return interaction.reply({ content: "✅ Kicked", ephemeral: true });
     }
 
     if (action === "ban") {
-      await member.ban({ reason: "Banned via panel" });
+      await member.ban();
       return interaction.reply({ content: "✅ Banned", ephemeral: true });
+    }
+
+    if (action === "timeout") {
+      await member.timeout(10 * 60 * 1000);
+      return interaction.reply({ content: "⏳ Timed out (10 minutes)", ephemeral: true });
+    }
+
+    if (action === "untimeout") {
+      await member.timeout(null);
+      return interaction.reply({ content: "✅ Timeout removed", ephemeral: true });
+    }
+
+    if (action === "removewarn") {
+      if (warnings[id]?.length) warnings[id].pop();
+      saveWarns();
+      return interaction.reply({ content: "➖ Removed 1 warning", ephemeral: true });
     }
   }
 
-  /* ---------- MODAL ---------- */
+  /* ---------- WARN MODAL ---------- */
   if (interaction.isModalSubmit()) {
     const id = interaction.customId.split("_")[1];
-    addWarning(
-      id,
-      interaction.fields.getTextInputValue("reason"),
-      interaction.user.id
+    if (!warnings[id]) warnings[id] = [];
+    warnings[id].push({ reason: interaction.fields.getTextInputValue("reason") });
+    saveWarns();
+    return interaction.reply({ content: "⚠ Warning issued", ephemeral: true });
+  }
+
+  /* ---------- BACKUP SLASH ---------- */
+  if (interaction.isChatInputCommand() && interaction.commandName === "backup") {
+    const loc = interaction.options.getString("location");
+    const m = await interaction.channel.send(
+      `<@&${BACKUP_ROLE}>\n📦 **BACKUP REQUEST**\n\n📍 Location: **${loc}**\n👤 Requested by: ${interaction.user}\n\nReact with ✅ if you can give backup`
     );
-    return interaction.reply({ content: "⚠️ Warning issued", ephemeral: true });
+    await m.react("✅");
+    await m.react("❌");
+    return interaction.reply({ content: "✅ Backup request sent", ephemeral: true });
+  }
+
+  /* ---------- CRIMEPASS ---------- */
+  if (interaction.isChatInputCommand() && interaction.commandName === "crimepass") {
+    if (!interaction.member.roles.cache.has(CRIMEPASS_ROLE))
+      return interaction.reply({ content: "❌ No permission", ephemeral: true });
+
+    const channel = await interaction.guild.channels.create({
+      name: `crimepass-${interaction.user.username}`,
+      type: ChannelType.GuildText,
+      parent: CRIME_CATEGORY,
+      permissionOverwrites: [
+        { id: interaction.guild.id, deny: ["ViewChannel"] },
+        { id: interaction.user.id, allow: ["ViewChannel", "SendMessages"] }
+      ]
+    });
+
+    const embed = new EmbedBuilder()
+      .setTitle("🟥 CRIME PASS REQUEST")
+      .setDescription(
+        `User: ${interaction.user}\n\nWants to become a Criminal for 1 hour.\n⏳ Admin Action Required`
+      )
+      .setColor(0xff0000);
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("crime_accept").setLabel("Accept").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("crime_deny").setLabel("Deny").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId("crime_close").setLabel("Close Ticket").setStyle(ButtonStyle.Secondary)
+    );
+
+    await channel.send({
+      content: CRIME_ADMIN_ROLES.map(r => `<@&${r}>`).join(" "),
+      embeds: [embed],
+      components: [row]
+    });
+
+    return interaction.reply({ content: "✅ Crimepass ticket created", ephemeral: true });
   }
 });
-
-/* ================= SAFETY ================= */
-process.on("unhandledRejection", console.error);
-process.on("uncaughtException", console.error);
 
 /* ================= LOGIN ================= */
 client.login(process.env.DISCORD_TOKEN);
