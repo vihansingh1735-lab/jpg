@@ -123,7 +123,11 @@ client.once("ready", async () => {
     new SlashCommandBuilder()
       .setName("timeout")
       .setDescription("Timeout a user")
-      .addUserOption(o => o.setName("user").setRequired(true))
+.addStringOption(o =>
+  o.setName("reason")
+   .setDescription("Reason for timeout")
+   .setRequired(false)
+) 
       .addIntegerOption(o => o.setName("minutes").setRequired(true))
       .addStringOption(o => o.setName("reason"))
       .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
