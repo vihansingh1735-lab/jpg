@@ -241,6 +241,55 @@ client.on("interactionCreate", async interaction => {
     return interaction.reply({ content: "✅ Crimepass ticket created", ephemeral: true });
   }
 });
+/* ---------- CRIMEPASS BUTTONS ---------- */
+if (interaction.isButton()) {
 
+  /* === ACCEPT === */
+  if (interaction.customId === "crime_accept") {
+    // permission check
+    if (!interaction.member.roles.cache.some(r => CRIME_ADMIN_ROLES.includes(r.id))) {
+      return interaction.reply({ content: "❌ You are not allowed to do this.", ephemeral: true });
+    }
+
+    const user = interaction.channel.permissionOverwrites.cache
+      .find(p => p.type === 1)?.id;
+
+    if (!user) {
+      return interaction.reply({ content: "❌ User not found.", ephemeral: true });
+    }
+
+    await interaction.reply({ content: "✅ Crime pass **ACCEPTED**. Timer started (1 hour)." });
+
+    // ⏳ AUTO END AFTER 1 HOUR
+    setTimeout(async () => {
+      try {
+        await interaction.channel.send(`<@${user}> ⏳ **Crimepass has ended.**`);
+      } catch {}
+    }, 60 * 60 * 1000);
+
+    return;
+  }
+
+  /* === DENY === */
+  if (interaction.customId === "crime_deny") {
+    if (!interaction.member.roles.cache.some(r => CRIME_ADMIN_ROLES.includes(r.id))) {
+      return interaction.reply({ content: "❌ You are not allowed to do this.", ephemeral: true });
+    }
+
+    await interaction.reply("❌ Crime pass request **DENIED**.");
+    return;
+  }
+
+  /* === CLOSE TICKET === */
+  if (interaction.customId === "crime_close") {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+      return interaction.reply({ content: "❌ You cannot close this ticket.", ephemeral: true });
+    }
+
+    await interaction.reply("🔒 Closing ticket...");
+    setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
+    return;
+  }
+}
 /* ================= LOGIN ================= */
 client.login(process.env.DISCORD_TOKEN);
