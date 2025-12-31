@@ -4,12 +4,18 @@ const {
   GatewayIntentBits,
   Partials,
   EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   SlashCommandBuilder,
   PermissionFlagsBits
 } = require("discord.js");
 const fs = require("fs");
 
-// ---------- CLIENT ----------
+/* ================= CLIENT ================= */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -21,157 +27,186 @@ const client = new Client({
 });
 
 const PREFIX = "!";
-const BAD_WORDS = ["fuck", "shit", "bitch", "asshole", "nigger", "faggot"];
+const BAD_WORDS = ["fuck","shit","bitch","asshole","nigger","faggot"];
 
-// ---------- STORAGE ----------
+/* ================= STORAGE ================= */
 const CONFIG_PATH = "./data/config.json";
 const WARN_PATH = "./data/warnings.json";
 
-const config = fs.existsSync(CONFIG_PATH)
-  ? JSON.parse(fs.readFileSync(CONFIG_PATH))
-  : {};
+const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH)) : {};
+const warnings = fs.existsSync(WARN_PATH) ? JSON.parse(fs.readFileSync(WARN_PATH)) : {};
 
-const warnings = fs.existsSync(WARN_PATH)
-  ? JSON.parse(fs.readFileSync(WARN_PATH))
-  : {};
+const saveConfig = () => fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+const saveWarnings = () => fs.writeFileSync(WARN_PATH, JSON.stringify(warnings, null, 2));
 
-function saveConfig() {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-}
+/* ================= HELPERS ================= */
+const getGuildConfig = g => config[g.id] || {};
+const isMod = m => m.permissions.has(PermissionFlagsBits.ModerateMembers);
 
-function saveWarnings() {
-  fs.writeFileSync(WARN_PATH, JSON.stringify(warnings, null, 2));
-}
-
-// ---------- HELPERS ----------
-function getGuildConfig(guildId) {
-  return config[guildId] || {};
-}
-
-function getLogChannel(guild) {
-  const id = getGuildConfig(guild.id).logChannelId;
-  return id ? guild.channels.cache.get(id) : null;
-}
-
-function isMod(member) {
-  return member.permissions.has(PermissionFlagsBits.ModerateMembers);
-}
+const getLogChannel = g => {
+  const id = getGuildConfig(g).logChannelId;
+  return id ? g.channels.cache.get(id) : null;
+};
 
 function addWarning(userId, reason, modId) {
   if (!warnings[userId]) warnings[userId] = [];
-  warnings[userId].push({
-    reason,
-    moderator: modId,
-    time: new Date().toISOString()
-  });
+  warnings[userId].push({ reason, moderator: modId, time: new Date().toISOString() });
   saveWarnings();
 }
 
-// ---------- READY ----------
+const getWarnCount = id => warnings[id]?.length || 0;
+
+async function applyTimeout(member, minutes, reason) {
+  await member.timeout(Date.now() + minutes * 60 * 1000, reason).catch(() => {});
+  const log = getLogChannel(member.guild);
+  if (log) {
+    log.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("User Timed Out")
+          .setDescription(`${member} for **${minutes} minutes**`)
+          .addFields({ name: "Reason", value: reason })
+          .setColor(0xe67e22)
+          .setTimestamp()
+      ]
+    });
+  }
+}
+
+/* ================= READY ================= */
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
   const commands = [
-    new SlashCommandBuilder()
-      .setName("help")
-      .setDescription("Show help"),
-
+    new SlashCommandBuilder().setName("help").setDescription("Show help"),
     new SlashCommandBuilder()
       .setName("setlog")
       .setDescription("Set log channel")
-      .addChannelOption(o =>
-        o.setName("channel").setDescription("Log channel").setRequired(true)
-      )
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addChannelOption(o => o.setName("channel").setDescription("Log channel").setRequired(true))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder()
+      .setName("moderate")
+      .setDescription("Open moderation panel")
+      .addUserOption(o => o.setName("user").setDescription("Target").setRequired(true)),
+    new SlashCommandBuilder()
+      .setName("timeout")
+      .setDescription("Timeout a user")
+      .addUserOption(o => o.setName("user").setRequired(true))
+      .addIntegerOption(o => o.setName("minutes").setRequired(true))
+      .addStringOption(o => o.setName("reason"))
+      .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
   ].map(c => c.toJSON());
 
   await client.application.commands.set(commands);
-  console.log("🌍 Global slash commands synced");
+  console.log("🌍 Slash commands synced");
 });
 
-// ---------- PREFIX ----------
+/* ================= MESSAGE (PREFIX + AUTOMOD) ================= */
 client.on("messageCreate", async message => {
-  if (message.author.bot || !message.guild) return;
+  if (!message.guild || message.author.bot) return;
 
-  // -------- AUTOMOD --------
   const content = message.content.toLowerCase();
 
+  // AutoMod – bad words
   if (BAD_WORDS.some(w => content.includes(w))) {
     await message.delete().catch(() => {});
     addWarning(message.author.id, "Bad language", client.user.id);
-
-    const log = getLogChannel(message.guild);
-    if (log) {
-      const embed = new EmbedBuilder()
-        .setTitle("AutoMod: Bad Word")
-        .setDescription(`${message.author} used bad language`)
-        .setColor(0xe74c3c)
-        .setTimestamp();
-      log.send({ embeds: [embed] });
-    }
-    return;
   }
 
+  // AutoMod – invite
   if (content.includes("discord.gg/")) {
     await message.delete().catch(() => {});
     addWarning(message.author.id, "Invite link", client.user.id);
-    return;
   }
-async function applyTimeout(member, minutes, reason) {
-  const until = Date.now() + minutes * 60 * 1000;
 
-  await member.timeout(until, reason).catch(() => {});
-  
-  const log = getLogChannel(member.guild);
-  if (log) {
-    const embed = new EmbedBuilder()
-      .setTitle("User Timed Out")
-      .setDescription(`${member} timed out for **${minutes} minutes**`)
-      .addFields({ name: "Reason", value: reason })
-      .setColor(0xe67e22)
-      .setTimestamp();
-    log.send({ embeds: [embed] });
-  }
-}
+  const warnCount = getWarnCount(message.author.id);
+  if (warnCount === 3) await applyTimeout(message.member, 15, "3 warnings");
+  if (warnCount === 5) await applyTimeout(message.member, 1440, "5 warnings");
 
-function getWarnCount(userId) {
-  return warnings[userId]?.length || 0;
-}
-  // -------- PREFIX COMMANDS --------
+  // Prefix
   if (!message.content.startsWith(PREFIX)) return;
-
-  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
-  const cmd = args.shift().toLowerCase();
-
-  if (cmd === "help") {
-    return message.reply("Commands: `!help`, `/setlog`");
-  }
+  const cmd = message.content.slice(PREFIX.length).trim().toLowerCase();
+  if (cmd === "help") message.reply("Use `/moderate` or `/help`");
 });
 
-// ---------- INTERACTIONS ----------
+/* ================= INTERACTIONS ================= */
 client.on("interactionCreate", async interaction => {
-  if (!interaction.isChatInputCommand()) return;
 
-  if (interaction.commandName === "help") {
-    return interaction.reply({
-      content: "Use `!help` or moderation commands",
-      ephemeral: true
-    });
+  /* ---------- SLASH ---------- */
+  if (interaction.isChatInputCommand()) {
+    if (interaction.commandName === "help") {
+      return interaction.reply({ content: "Prefix: `!help`\nSlash: `/moderate`", ephemeral: true });
+    }
+
+    if (interaction.commandName === "setlog") {
+      config[interaction.guild.id] = { logChannelId: interaction.options.getChannel("channel").id };
+      saveConfig();
+      return interaction.reply({ content: "✅ Log channel set", ephemeral: true });
+    }
+
+    if (interaction.commandName === "timeout") {
+      if (!isMod(interaction.member)) return interaction.reply({ content: "❌ No permission", ephemeral: true });
+      await applyTimeout(
+        interaction.options.getMember("user"),
+        interaction.options.getInteger("minutes"),
+        interaction.options.getString("reason") || "No reason"
+      );
+      return interaction.reply({ content: "✅ User timed out", ephemeral: true });
+    }
+
+    if (interaction.commandName === "moderate") {
+      if (!isMod(interaction.member)) return interaction.reply({ content: "❌ No permission", ephemeral: true });
+      const target = interaction.options.getMember("user");
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`warn_${target.id}`).setLabel("Warn").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`kick_${target.id}`).setLabel("Kick").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`ban_${target.id}`).setLabel("Ban").setStyle(ButtonStyle.Danger)
+      );
+
+      return interaction.reply({
+        embeds: [new EmbedBuilder().setTitle("Moderation Panel").setDescription(`${target}`)],
+        components: [row],
+        ephemeral: true
+      });
+    }
   }
 
-  if (interaction.commandName === "setlog") {
-    const channel = interaction.options.getChannel("channel");
-    config[interaction.guild.id] = {
-      ...getGuildConfig(interaction.guild.id),
-      logChannelId: channel.id
-    };
-    saveConfig();
-    return interaction.reply({
-      content: `✅ Log channel set to ${channel}`,
-      ephemeral: true
-    });
+  /* ---------- BUTTONS ---------- */
+  if (interaction.isButton()) {
+    const [action, id] = interaction.customId.split("_");
+    const member = await interaction.guild.members.fetch(id);
+
+    if (action === "warn") {
+      const modal = new ModalBuilder()
+        .setCustomId(`warnmodal_${id}`)
+        .setTitle("Warn User")
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId("reason").setLabel("Reason").setStyle(TextInputStyle.Paragraph)
+          )
+        );
+      return interaction.showModal(modal);
+    }
+
+    if (action === "kick") {
+      await member.kick("Kicked via panel");
+      return interaction.reply({ content: "✅ Kicked", ephemeral: true });
+    }
+
+    if (action === "ban") {
+      await member.ban({ reason: "Banned via panel" });
+      return interaction.reply({ content: "✅ Banned", ephemeral: true });
+    }
+  }
+
+  /* ---------- MODAL ---------- */
+  if (interaction.isModalSubmit()) {
+    const id = interaction.customId.split("_")[1];
+    addWarning(id, interaction.fields.getTextInputValue("reason"), interaction.user.id);
+    return interaction.reply({ content: "⚠️ Warning issued", ephemeral: true });
   }
 });
 
-// ---------- LOGIN ----------
+/* ================= LOGIN ================= */
 client.login(process.env.DISCORD_TOKEN);
