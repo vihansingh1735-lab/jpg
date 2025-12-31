@@ -13,18 +13,16 @@ const {
   TextInputStyle,
   SlashCommandBuilder,
   PermissionFlagsBits,
-  ChannelType, 
-  express
+  ChannelType
 } = require("discord.js");
-const app = express();
+const http = require("http");
 
 const PORT = process.env.PORT || 3000;
 
-app.get("/", (req, res) => {
-  res.send("🟢 Discord bot is running.");
-});
-
-app.listen(PORT, () => {
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("🟢 Discord bot is running.");
+}).listen(PORT, () => {
   console.log(`🌐 Web service running on port ${PORT}`);
 });
 if (!process.env.DISCORD_TOKEN) throw new Error("DISCORD_TOKEN missing");
